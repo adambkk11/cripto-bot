@@ -55,7 +55,7 @@ def _chat(model, user):
         json={
             "model": model,
             "temperature": 0.2,
-            "max_tokens": 300,
+            "max_tokens": 2000,
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
         },
         timeout=60,
@@ -79,7 +79,7 @@ def _call_anthropic(user):
         "https://api.anthropic.com/v1/messages",
         headers={"x-api-key": config.LLM_API_KEY, "anthropic-version": "2023-06-01",
                  "Content-Type": "application/json"},
-        json={"model": config.MODEL, "max_tokens": 300, "system": SYSTEM,
+        json={"model": config.MODEL, "max_tokens": 2000, "system": SYSTEM,
               "messages": [{"role": "user", "content": user}]},
         timeout=60,
     )
