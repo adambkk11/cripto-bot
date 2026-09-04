@@ -1,0 +1,13 @@
+[Unit]
+Description=cripto-bot
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/cripto-bot
+ExecStart=/opt/cripto-bot/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=30
+EnvironmentFile=/opt/cripto-bot/.env
+
+[Install]
+WantedBy=multi-user.target

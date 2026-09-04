@@ -1,0 +1,4 @@
+requests>=2.31
+ccxt>=4.3
+
+python-dotenv>=1.0
