@@ -1,16 +1,13 @@
 """
-Recoge datos públicos de Binance (no requiere API key):
-- precio y volumen (spot, velas 15m)
-- funding rate (futuros perpetuos)
-- open interest y su variación
-- ratio long/short de grandes cuentas
-- volumen taker buy vs sell
+Datos públicos de mercado (sin API key). Preparado para correr desde GitHub Actions (IPs de EE.UU.):
+- precio y volumen: espejo público de Binance (data-api.binance.vision), no geobloqueado
+- funding rate, open interest, ratio long/short: Bybit v5 (API pública accesible desde EE.UU.)
 """
 import time
 import requests
 
-SPOT = "https://api.binance.com"
-FUT = "https://fapi.binance.com"
+SPOT = "https://data-api.binance.vision"
+BYBIT = "https://api.bybit.com"
 
 
 def _get(url, params=None, retries=3):
@@ -19,18 +16,18 @@ def _get(url, params=None, retries=3):
             r = requests.get(url, params=params, timeout=10)
             r.raise_for_status()
             return r.json()
-        except Exception as e:
+        except Exception:
             if i == retries - 1:
                 raise
             time.sleep(2)
 
 
-def fut_symbol(symbol):
+def plain(symbol):
     return symbol.replace("/", "")
 
 
 def klines(symbol, interval="15m", limit=96):
-    data = _get(f"{SPOT}/api/v3/klines", {"symbol": fut_symbol(symbol), "interval": interval, "limit": limit})
+    data = _get(f"{SPOT}/api/v3/klines", {"symbol": plain(symbol), "interval": interval, "limit": limit})
     return [
         {"t": k[0], "o": float(k[1]), "h": float(k[2]), "l": float(k[3]), "c": float(k[4]),
          "v": float(k[5]), "taker_buy": float(k[9])}
@@ -39,28 +36,32 @@ def klines(symbol, interval="15m", limit=96):
 
 
 def price(symbol):
-    return float(_get(f"{SPOT}/api/v3/ticker/price", {"symbol": fut_symbol(symbol)})["price"])
+    return float(_get(f"{SPOT}/api/v3/ticker/price", {"symbol": plain(symbol)})["price"])
 
 
 def funding(symbol, limit=6):
-    data = _get(f"{FUT}/fapi/v1/fundingRate", {"symbol": fut_symbol(symbol), "limit": limit})
-    return [float(d["fundingRate"]) for d in data]
+    d = _get(f"{BYBIT}/v5/market/funding-history",
+             {"category": "linear", "symbol": plain(symbol), "limit": limit})
+    rows = d["result"]["list"]
+    return [float(x["fundingRate"]) for x in reversed(rows)]
 
 
-def open_interest_hist(symbol, period="1h", limit=24):
-    data = _get(f"{FUT}/futures/data/openInterestHist",
-                {"symbol": fut_symbol(symbol), "period": period, "limit": limit})
-    return [float(d["sumOpenInterestValue"]) for d in data]
+def open_interest_hist(symbol, limit=24):
+    d = _get(f"{BYBIT}/v5/market/open-interest",
+             {"category": "linear", "symbol": plain(symbol), "intervalTime": "1h", "limit": limit})
+    rows = d["result"]["list"]
+    return [float(x["openInterest"]) for x in reversed(rows)]
 
 
-def long_short_ratio(symbol, period="1h", limit=6):
-    data = _get(f"{FUT}/futures/data/topLongShortAccountRatio",
-                {"symbol": fut_symbol(symbol), "period": period, "limit": limit})
-    return [float(d["longShortRatio"]) for d in data]
+def long_short_ratio(symbol, limit=6):
+    d = _get(f"{BYBIT}/v5/market/account-ratio",
+             {"category": "linear", "symbol": plain(symbol), "period": "1h", "limit": limit})
+    rows = d["result"]["list"]
+    return [float(x["buyRatio"]) / max(float(x["sellRatio"]), 1e-9) for x in reversed(rows)]
 
 
 def snapshot(symbol):
-    """Devuelve un resumen numérico compacto para pasar al modelo."""
+    """Resumen numérico compacto para pasar al modelo."""
     ks = klines(symbol)
     closes = [k["c"] for k in ks]
     vols = [k["v"] for k in ks]
@@ -85,18 +86,18 @@ def snapshot(symbol):
         f = funding(symbol)
         snap["funding_last"] = f[-1]
         snap["funding_avg_6"] = round(sum(f) / len(f), 6)
-    except Exception:
-        pass
+    except Exception as e:
+        snap["funding_error"] = str(e)[:80]
     try:
         oi = open_interest_hist(symbol)
         snap["oi_chg_4h_pct"] = round(pct(oi[-5], oi[-1]), 3)
         snap["oi_chg_24h_pct"] = round(pct(oi[0], oi[-1]), 3)
-    except Exception:
-        pass
+    except Exception as e:
+        snap["oi_error"] = str(e)[:80]
     try:
         ls = long_short_ratio(symbol)
-        snap["top_long_short_ratio"] = ls[-1]
-        snap["top_long_short_trend"] = round(ls[-1] - ls[0], 3)
-    except Exception:
-        pass
+        snap["long_short_ratio"] = round(ls[-1], 3)
+        snap["long_short_trend"] = round(ls[-1] - ls[0], 3)
+    except Exception as e:
+        snap["ls_error"] = str(e)[:80]
     return snap
