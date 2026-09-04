@@ -2,10 +2,6 @@
 Pasa el snapshot numérico al modelo y obtiene:
   p_up, p_down (probabilidades para las próximas ~4-12h), action, thesis.
 El modelo NO ejecuta nada: solo opina. La decisión final la toma main.py con el umbral.
-
-Proveedores:
-  LLM_PROVIDER=openai   -> cualquier API compatible OpenAI (Groq, Gemini, OpenRouter, Together, Ollama...)
-  LLM_PROVIDER=anthropic
 """
 import json
 import requests
@@ -34,19 +30,47 @@ def _user_msg(snapshot, position):
     )
 
 
-def _call_openai_compat(user):
-    r = requests.post(
+def _headers():
+    return {"Authorization": f"Bearer {config.LLM_API_KEY}", "Content-Type": "application/json"}
+
+
+def _pick_model():
+    """Si el modelo configurado no existe, pregunta al proveedor cuáles hay y elige el mejor disponible."""
+    r = requests.get(f"{config.LLM_BASE_URL.rstrip('/')}/models", headers=_headers(), timeout=30)
+    r.raise_for_status()
+    ids = [m["id"] for m in r.json().get("data", [])]
+    prefs = ["70b", "405b", "120b", "maverick", "scout", "llama-4", "llama-3.3", "llama", "qwen", "mixtral", "gemma"]
+    for key in prefs:
+        for mid in ids:
+            low = mid.lower()
+            if key in low and "guard" not in low and "whisper" not in low and "tts" not in low and "vision" not in low:
+                return mid
+    return ids[0] if ids else config.MODEL
+
+
+def _chat(model, user):
+    return requests.post(
         f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {config.LLM_API_KEY}", "Content-Type": "application/json"},
+        headers=_headers(),
         json={
-            "model": config.MODEL,
+            "model": model,
             "temperature": 0.2,
             "max_tokens": 300,
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
         },
         timeout=60,
     )
-    r.raise_for_status()
+
+
+def _call_openai_compat(user):
+    r = _chat(config.MODEL, user)
+    if r.status_code in (400, 404) and "model" in r.text.lower():
+        alt = _pick_model()
+        print(f"Modelo '{config.MODEL}' no disponible; usando '{alt}'. "
+              f"Pon la Variable MODEL={alt} en GitHub para fijarlo.", flush=True)
+        r = _chat(alt, user)
+    if not r.ok:
+        raise RuntimeError(f"Error del modelo {r.status_code}: {r.text[:300]}")
     return r.json()["choices"][0]["message"]["content"]
 
 
@@ -67,7 +91,6 @@ def get_signal(snapshot, position):
     user = _user_msg(snapshot, position)
     text = _call_anthropic(user) if config.LLM_PROVIDER == "anthropic" else _call_openai_compat(user)
     text = text.strip().replace("```json", "").replace("```", "").strip()
-    # por si el modelo mete texto alrededor del JSON
     if "{" in text:
         text = text[text.index("{"): text.rindex("}") + 1]
     out = json.loads(text)
